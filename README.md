@@ -1,7 +1,6 @@
 # Colorectal Histopathology Classification with CNNs: A Multi-Resolution Study on PathMNIST
 
-CS230 (Deep Learning), Stanford University — course project
-Team: Ximing Gao, Yuyi Zhang
+CS230 (Deep Learning) — student course project
 
 ## Overview
 We classify colorectal tissue patches into 9 tissue types and compare:
