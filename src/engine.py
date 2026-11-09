@@ -119,6 +119,7 @@ def run_experiment(
     model,
     data_size=64,
     input_size=None,
+    hed_sigma=0.0,
     epochs=30,
     batch_size=128,
     lr=1e-3,
@@ -140,6 +141,8 @@ def run_experiment(
     data_size:   which PathMNIST file to read (64, 128 or 224).
     input_size:  size the network actually sees. None = same as data_size.
                  input_size=224 with data_size=64 is the upsampling experiment.
+    hed_sigma:   stain augmentation strength for training images (0 = off).
+                 0.2 means each image gets up to 20% more or less of each dye.
     lr decay:    learning rate is multiplied by lr_decay_factor whenever val
                  macro-F1 hasn't improved for lr_patience epochs.
     early stop:  training ends after early_stop_patience epochs without a
@@ -152,7 +155,7 @@ def run_experiment(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     train_loader, val_loader = make_loaders(data_size, batch_size, num_workers, root=data_root)
-    prep = GPUPreprocess(device, out_size=input_size)
+    prep = GPUPreprocess(device, out_size=input_size, hed_sigma=hed_sigma)
     net = build_model(model).to(device)
 
     optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
@@ -175,7 +178,7 @@ def run_experiment(
     }
     seen = input_size or data_size
     print(f"=== {name}: {model}, data {data_size}x{data_size}, network input {seen}x{seen}, "
-          f"{result['params'] / 1e6:.2f}M params, device {device} ===")
+          f"HED aug {hed_sigma}, seed {seed}, {result['params'] / 1e6:.2f}M params, device {device} ===")
 
     best_f1, best_epoch, epochs_since_best = -1.0, 0, 0
     for epoch in range(1, epochs + 1):

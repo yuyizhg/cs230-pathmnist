@@ -6,6 +6,7 @@ augmentation, normalization and optional resizing happen on the GPU in
 `GPUPreprocess`, which keeps the 4-vCPU instance from becoming the bottleneck.
 """
 import functools
+import math
 import os
 import zipfile
 
@@ -33,6 +34,15 @@ NUM_CLASSES = len(CLASS_NAMES)
 # Every model uses them so all runs see identically normalized inputs.
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+
+# H&E stain matrix (Ruifrok & Johnston, 2001): rows are the RGB absorbance of
+# hematoxylin, eosin and DAB. Same values scikit-image uses in rgb2hed/hed2rgb,
+# so the training augmentation below matches src/hed_shift.py exactly.
+RGB_FROM_HED = np.array([[0.65, 0.70, 0.29],
+                         [0.07, 0.99, 0.11],
+                         [0.27, 0.57, 0.78]])
+HED_FROM_RGB = np.linalg.inv(RGB_FROM_HED)
+_LOG_ADJUST = math.log(1e-6)
 
 
 def npz_path(root, size):
@@ -127,23 +137,51 @@ def random_flips(x):
     return torch.where(v, x.flip(2), x)
 
 
+def hed_jitter(x, sigma, hed_from_rgb, rgb_from_hed, alpha=None):
+    """Random stain augmentation on a GPU batch, x: float [N, 3, H, W] in [0, 1].
+
+    Unmixes each image into hematoxylin (H) and eosin (E) amounts, scales each
+    by its own random factor in [1 - sigma, 1 + sigma], and mixes back to RGB.
+    This is the GPU version of hed_perturb() in src/hed_shift.py (same math as
+    scikit-image's rgb2hed -> scale -> hed2rgb). Pass `alpha` [N or 1, 3, 1, 1]
+    to use fixed factors instead of random ones (used for the sanity check).
+    """
+    od = torch.log(x.clamp(min=1e-6)) / _LOG_ADJUST
+    hed = torch.einsum("nchw,cd->ndhw", od, hed_from_rgb).clamp(min=0)
+    if alpha is None:
+        alpha = 1 + (torch.rand(x.shape[0], 3, 1, 1, device=x.device) * 2 - 1) * sigma
+        alpha[:, 2] = 1.0  # DAB channel: H&E slides have no DAB, leave it alone
+    hed = hed * alpha
+    rgb = torch.exp(-torch.einsum("nchw,cd->ndhw", hed * -_LOG_ADJUST, rgb_from_hed))
+    return rgb.clamp(0, 1)
+
+
 class GPUPreprocess:
     """Per-batch preprocessing on the GPU.
 
-    uint8 [0, 255] -> float [0, 1] -> random flips (training only)
+    uint8 [0, 255] -> float [0, 1] -> optional HED stain jitter (training only)
+    -> random flips (training only)
     -> optional bilinear resize (e.g. 64 -> 224 for the upsampling experiment)
     -> per-channel normalization with ImageNet statistics.
-    Validation batches get the same steps minus the flips (deterministic).
+    Validation batches get the same steps minus the augmentation (deterministic).
+
+    hed_sigma=0 (default) turns stain augmentation off and draws no extra random
+    numbers, so earlier runs reproduce exactly.
     """
 
-    def __init__(self, device, out_size=None):
+    def __init__(self, device, out_size=None, hed_sigma=0.0):
         self.mean = torch.tensor(IMAGENET_MEAN, device=device).view(1, 3, 1, 1)
         self.std = torch.tensor(IMAGENET_STD, device=device).view(1, 3, 1, 1)
         self.out_size = out_size
+        self.hed_sigma = hed_sigma
+        self.hed_from_rgb = torch.tensor(HED_FROM_RGB, dtype=torch.float32, device=device)
+        self.rgb_from_hed = torch.tensor(RGB_FROM_HED, dtype=torch.float32, device=device)
 
     def __call__(self, x, train):
         x = x.float().div_(255)
         if train:
+            if self.hed_sigma > 0:
+                x = hed_jitter(x, self.hed_sigma, self.hed_from_rgb, self.rgb_from_hed)
             x = random_flips(x)
         if self.out_size is not None and x.shape[-1] != self.out_size:
             x = F.interpolate(x, size=(self.out_size, self.out_size), mode="bilinear", align_corners=False)

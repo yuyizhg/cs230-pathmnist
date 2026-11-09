@@ -1,0 +1,5 @@
+run,best epoch,clean F1,hed_0.15 F1,hed_0.30 F1,hed_0.15 drop,hed_0.30 drop
+baseline_cnn_64,28,0.9953,0.986,0.9381,0.0093,0.0572
+resnet18_scratch_64,27,0.9945,0.9791,0.9094,0.0154,0.0851
+resnet18_pretrained_64,28,0.9953,0.9887,0.9561,0.0066,0.0392
+resnet18_pretrained_64up224,20,0.9993,0.9963,0.9706,0.003,0.0287
